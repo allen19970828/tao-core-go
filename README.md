@@ -169,7 +169,7 @@ flowchart LR
     D --> G[Parse qti-assessment-item Tags]
     F --> H[Replace Relative Asset Paths with Server URL]
     G --> H
-    H --> I[BalanceOptionsKey Algorithm<br/>(25% Key Distribution)]
+    H --> I["BalanceOptionsKey Algorithm<br/>(25% Key Distribution)"]
     I --> J[GORM Write to ITEMS & OPTIONS Tables]
 ```
 
@@ -524,7 +524,7 @@ flowchart LR
     D --> G[解析 qti-assessment-item 標籤]
     F --> H[取代題目 HTML 中的相對圖片路徑為伺服器 URL]
     G --> H
-    H --> I[BalanceOptionsKey 演算法<br/>(答案 25% 洗牌)]
+    H --> I["BalanceOptionsKey 演算法<br/>(答案 25% 洗牌)"]
     I --> J[GORM 寫入 ITEMS & OPTIONS 資料表]
 ```
 
