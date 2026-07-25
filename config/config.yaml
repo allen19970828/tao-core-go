@@ -1,0 +1,14 @@
+server:
+  port: 8080
+  mode: debug
+
+database:
+  driver: sqlite
+  dsn: "tao_core.db"
+
+jwt:
+  secret: "tao-core-go-super-secret-key-change-in-production"
+  expire_hours: 24
+
+webhook:
+  worker_pool_size: 5

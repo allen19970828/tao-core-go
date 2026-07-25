@@ -1,0 +1,33 @@
+# Binaries for programs and tests
+*.exe
+*.exe-e
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+/dist/
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+tao_core.db
+
+# Media uploads
+/uploads/media/*
+!/uploads/media/.gitkeep
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# Environment and local configs
+config.local.yaml
+.env
