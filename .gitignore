@@ -31,3 +31,10 @@ Thumbs.db
 # Environment and local configs
 config.local.yaml
 .env
+.env.*
+!*.env.example
+
+# Database backups must remain outside version control
+*.dump
+*.dump.sha256
+/backups/

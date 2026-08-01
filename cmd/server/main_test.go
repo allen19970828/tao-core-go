@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"tao-core-go/internal/database"
 	"tao-core-go/internal/handler"
 	"tao-core-go/internal/middleware"
 )
@@ -67,17 +70,44 @@ func TestProtectedRoutesRejectAnonymousRequests(t *testing.T) {
 }
 
 func TestDatabaseSecurityValidation(t *testing.T) {
-	if err := validateDatabaseSecurity("release", "postgres", "host=db sslmode=disable", false); err == nil {
+	if err := database.ValidateTransportSecurity("release", "postgres", "host=db sslmode=disable", false); err == nil {
 		t.Fatal("expected insecure production PostgreSQL DSN to be rejected")
 	}
-	if err := validateDatabaseSecurity("release", "postgres", "host=db sslmode=verify-full", false); err != nil {
+	if err := database.ValidateTransportSecurity("release", "postgres", "host=db sslmode=verify-full", false); err != nil {
 		t.Fatalf("expected verified TLS DSN to pass: %v", err)
 	}
-	if err := validateDatabaseSecurity("release", "postgres", "host=postgres sslmode=disable", true); err != nil {
+	if err := database.ValidateTransportSecurity("release", "postgres", "host=postgres sslmode=disable", true); err != nil {
 		t.Fatalf("expected explicit isolated-network exception to pass: %v", err)
 	}
-	if _, err := openDatabase("unsupported", "ignored"); err == nil {
+	if _, err := database.Open("unsupported", "ignored"); err == nil {
 		t.Fatal("expected unknown database driver to fail")
+	}
+}
+
+type readinessPinger struct{ err error }
+
+func (p readinessPinger) PingContext(context.Context) error { return p.err }
+
+func TestOperationalRoutesReportLivenessAndReadiness(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for name, testCase := range map[string]struct {
+		pinger    readinessPinger
+		readyCode int
+	}{
+		"database ready":   {readinessPinger{}, http.StatusOK},
+		"database offline": {readinessPinger{err: errors.New("offline")}, http.StatusServiceUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			router := gin.New()
+			registerOperationalRoutes(router, testCase.pinger)
+			for path, expected := range map[string]int{"/health": http.StatusOK, "/ready": testCase.readyCode} {
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+				if response.Code != expected {
+					t.Fatalf("%s: expected %d, got %d (%s)", path, expected, response.Code, response.Body.String())
+				}
+			}
+		})
 	}
 }
 

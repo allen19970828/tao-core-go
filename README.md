@@ -271,17 +271,21 @@ erDiagram
 ```text
 tao-core-go/
 ├── Dockerfile                       # Multi-stage non-root Docker build
+├── .dockerignore                    # Excludes local secrets, databases, and backups from build context
 ├── docker-compose.yml               # One-click deployment environment (Go + PostgreSQL)
+├── Makefile                         # Repeatable verification and staging commands
 ├── go.mod                           # Go module manifest
 ├── go.sum                           # Go dependency checksum lock
 ├── config/
 │   └── config.yaml                  # System default configuration
 ├── cmd/
+│   ├── migrate/                    # Migration and read-only schema verification CLI
 │   └── server/
 │       └── main.go                  # System entrypoint (Auto-Migration, Services, Middleware, Routes)
 ├── uploads/                         # Media asset storage
 │   └── media/
 └── internal/
+    ├── database/                    # Database opening, migration, and schema verification
     ├── domain/
     │   └── models/                  # [Data Models] GORM strongly-typed models (User, Group, Test, Session, LTI, Proctor)
     ├── middleware/                  # [Middlewares] (JWT Auth, RBAC, RateLimiter, Prometheus Metrics)
@@ -309,6 +313,7 @@ export JWT_TOKEN="<SIGNED_JWT>"
 
 #### 1. System & Telemetry
 * **Healthcheck (`GET /health`)**
+* **Readiness (`GET /ready`)**: Returns 503 when the database cannot be reached.
 * **Metrics (`GET /metrics`)**: Prometheus metrics (total requests, active sessions, goroutine count, memory allocated).
 
 #### 2. Test Session API
@@ -379,11 +384,16 @@ go env -w GOSUMDB=sum.golang.org
 # 2. Run unit tests
 go test -v ./...
 
+# Run the real server with an isolated database and execute black-box security/E2E acceptance
+make e2e
+
 # 3. Configure required secrets, then launch Docker Compose
 cp .env.example .env
 # Replace every placeholder in .env before continuing.
 docker compose up -d --build
 ```
+
+Before sending staging traffic, follow the backup, migration, readiness, E2E, and guarded restore workflow in [docs/STAGING_RUNBOOK.md](docs/STAGING_RUNBOOK.md). CI runs the same process-level E2E against PostgreSQL 16.
 
 ---
 ---
@@ -649,17 +659,21 @@ erDiagram
 ```text
 tao-core-go/
 ├── Dockerfile                       # Multi-stage 非 root Docker 建構檔
+├── .dockerignore                    # 排除本機 secrets、資料庫與備份，不送入 build context
 ├── docker-compose.yml               # 一鍵部署配置 (Go Engine + PostgreSQL)
+├── Makefile                         # 可重複執行的驗證與 staging 指令
 ├── go.mod                           # Go 模組定義與依賴套件
 ├── go.sum                           # 套件版本鎖定檔
 ├── config/
 │   └── config.yaml                  # 系統預設設定檔
 ├── cmd/
+│   ├── migrate/                    # Migration 與唯讀 schema 驗證 CLI
 │   └── server/
 │       └── main.go                  # 系統進入點 (Auto-Migration, Services, Middleware, Routes)
 ├── uploads/                         # 靜態媒體檔案儲存區
 │   └── media/
 └── internal/
+    ├── database/                    # DB 開啟、migration 與 schema 驗證
     ├── domain/
     │   └── models/                  # [資料實體層] GORM 強型別資料結構 (User, Group, Test, Session, LTI, Proctor)
     ├── middleware/                  # [中間件層] (JWT Auth, RBAC, RateLimiter, Prometheus Metrics)
@@ -687,6 +701,7 @@ export JWT_TOKEN="<SIGNED_JWT>"
 
 #### 1. 系統健康檢查與監控
 * **GET `/health`**：檢視系統健康狀態。
+* **GET `/ready`**：檢查 HTTP process 與資料庫；資料庫無法連線時回傳 503。
 * **GET `/metrics`**：檢視 Prometheus 即時監控數據（總請求數、進行中會話數、Goroutine 數量、記憶體開銷）。
 
 #### 2. 測驗會話 (TestSession) API
@@ -757,11 +772,16 @@ go env -w GOSUMDB=sum.golang.org
 # 2. 執行全套單元測試
 go test -v ./...
 
+# 啟動真實服務與隔離資料庫，執行黑箱安全／完整流程 E2E
+make e2e
+
 # 3. 設定必要密鑰後啟動 Docker Compose
 cp .env.example .env
 # 繼續前請先替換 .env 內所有 placeholder。
 docker compose up -d --build
 ```
+
+staging 開放流量前，請依 [docs/STAGING_RUNBOOK.md](docs/STAGING_RUNBOOK.md) 完成 PostgreSQL 備份、migration、readiness、E2E 與具確認鎖的回復流程。CI 會對 PostgreSQL 16 執行相同的程序級驗收。
 
 ---
 

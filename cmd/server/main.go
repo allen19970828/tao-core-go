@@ -16,10 +16,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"tao-core-go/internal/database"
 	"tao-core-go/internal/domain/models"
 	"tao-core-go/internal/handler"
 	"tao-core-go/internal/middleware"
@@ -83,10 +82,10 @@ func main() {
 	// 3. 初始化 GORM 資料庫連線與資料表自動遷移 (Auto-Migrations)
 	dsn := viper.GetString("database.dsn")
 	databaseDriver := viper.GetString("database.driver")
-	if err := validateDatabaseSecurity(viper.GetString("server.mode"), databaseDriver, dsn, viper.GetBool("database.allow_insecure_internal")); err != nil {
+	if err := database.ValidateTransportSecurity(viper.GetString("server.mode"), databaseDriver, dsn, viper.GetBool("database.allow_insecure_internal")); err != nil {
 		logger.Fatal("資料庫 TLS 設定不安全", zap.Error(err))
 	}
-	db, err := openDatabase(databaseDriver, dsn)
+	db, err := database.Open(databaseDriver, dsn)
 	if err != nil {
 		logger.Fatal("資料庫連線失敗", zap.Error(err))
 	}
@@ -97,7 +96,7 @@ func main() {
 	defer sqlDB.Close()
 	maxOpen := viper.GetInt("database.max_open_connections")
 	maxIdle := viper.GetInt("database.max_idle_connections")
-	if isSQLiteDriver(databaseDriver) {
+	if database.IsSQLiteDriver(databaseDriver) {
 		maxOpen, maxIdle = 1, 1
 	}
 	if maxOpen <= 0 || maxIdle < 0 || maxIdle > maxOpen {
@@ -113,38 +112,8 @@ func main() {
 	}
 
 	logger.Info("正在執行資料庫 Auto-Migrations 自動遷移...")
-	err = db.AutoMigrate(
-		&models.User{},
-		&models.Role{},
-		&models.Permission{},
-		&models.UserRole{},
-		&models.RolePermission{},
-		&models.Item{},
-		&models.TestSection{},
-		&models.TestItem{},
-		&models.Test{},
-		&models.Delivery{},
-		&models.TestSession{},
-		&models.ItemResponse{},
-		&models.WebhookConfig{},
-		&models.WebhookLog{},
-		&models.LTIPlatform{},
-		&models.LTILinkSession{},
-		&models.LTIOIDCState{},
-		&models.LTIResourceLink{},
-		&models.ProctorEvent{},
-		&models.Group{},
-		&models.UserGroup{},
-		&models.DeliveryGroup{},
-	)
-	if err != nil {
+	if err := database.Migrate(db); err != nil {
 		logger.Fatal("資料庫 Migration 遷移失敗", zap.Error(err))
-	}
-	// 舊版只允許每個 issuer 一個 client；移除舊索引後改由 issuer + client_id 複合唯一索引管理。
-	if db.Migrator().HasIndex(&models.LTIPlatform{}, "idx_lti_platforms_issuer") {
-		if err := db.Migrator().DropIndex(&models.LTIPlatform{}, "idx_lti_platforms_issuer"); err != nil {
-			logger.Fatal("無法移除舊版 LTI issuer 唯一索引", zap.Error(err))
-		}
 	}
 
 	// Demo data 必須顯式啟用，避免空白的生產資料庫自動產生公開測驗。
@@ -227,6 +196,7 @@ func main() {
         <h3>可用 API 列表：</h3>
         <ul>
             <li>GET  <a href="/health">/health</a> - 系統健康檢查</li>
+            <li>GET  <a href="/ready">/ready</a> - 資料庫連線與服務就緒檢查</li>
             <li>GET  /metrics - Prometheus 效能與流量監控端點 (ADMIN)</li>
             <li>POST /api/v1/sessions/start - 開始測驗會話</li>
             <li>GET  /api/v1/sessions/:id - 查詢測驗狀態</li>
@@ -249,10 +219,7 @@ func main() {
 		c.String(200, html)
 	})
 
-	// 系統健康檢查端點
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "UP", "engine": "tao-core-go", "timestamp": time.Now()})
-	})
+	registerOperationalRoutes(r, sqlDB)
 
 	// 監控與 API 安全邊界集中於 registerProtectedRoutes。
 
@@ -295,40 +262,33 @@ func main() {
 	}
 }
 
-func openDatabase(driver, dsn string) (*gorm.DB, error) {
-	switch strings.ToLower(strings.TrimSpace(driver)) {
-	case "postgres", "postgresql":
-		return gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	case "sqlite", "sqlite3", "":
-		return gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	default:
-		return nil, fmt.Errorf("不支援的 database.driver: %s", driver)
-	}
-}
-
-func isSQLiteDriver(driver string) bool {
-	switch strings.ToLower(strings.TrimSpace(driver)) {
-	case "", "sqlite", "sqlite3":
-		return true
-	default:
-		return false
-	}
-}
-
-func validateDatabaseSecurity(mode, driver, dsn string, allowInsecureInternal bool) error {
-	if strings.EqualFold(strings.TrimSpace(mode), "release") && !isSQLiteDriver(driver) &&
-		strings.Contains(strings.ToLower(dsn), "sslmode=disable") && !allowInsecureInternal {
-		return errors.New("release 模式的 PostgreSQL 不可使用 sslmode=disable；僅隔離的內部容器網路可顯式設定 DATABASE_ALLOW_INSECURE_INTERNAL=true")
-	}
-	return nil
-}
-
 type apiRouteHandlers struct {
 	session *handler.SessionHandler
 	qti     *handler.QTIHandler
 	lti     *handler.LTIHandler
 	proctor *handler.ProctorHandler
 	results *handler.ResultsHandler
+}
+
+type databasePinger interface {
+	PingContext(context.Context) error
+}
+
+// registerOperationalRoutes separates liveness from readiness: /health only
+// confirms the HTTP process is alive, while /ready also verifies the database.
+func registerOperationalRoutes(r *gin.Engine, pinger databasePinger) {
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "UP", "engine": "tao-core-go", "timestamp": time.Now().UTC()})
+	})
+	r.GET("/ready", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+		if pinger == nil || pinger.PingContext(ctx) != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "NOT_READY", "engine": "tao-core-go"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "READY", "engine": "tao-core-go", "timestamp": time.Now().UTC()})
+	})
 }
 
 // registerProtectedRoutes 集中定義實際 API 安全邊界，避免新增路由時漏掛認證。

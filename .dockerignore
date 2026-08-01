@@ -1,0 +1,17 @@
+.git
+.github
+.env
+.env.*
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.dump.sha256
+backups/
+uploads/
+coverage.out
+handler-coverage.out
+*.test
+*.out
+.DS_Store
+Thumbs.db
