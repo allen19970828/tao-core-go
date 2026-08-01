@@ -13,7 +13,7 @@ import (
 const minJWTSecretLength = 32
 
 type JWTConfig struct {
-	Secret   string
+	Secret   string // #nosec G117 -- Runtime-only HMAC configuration; never serialized or logged.
 	Issuer   string
 	Audience string
 }

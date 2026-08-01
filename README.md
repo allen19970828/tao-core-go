@@ -1,6 +1,6 @@
 # 🚀 tao-core-go
 
-![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8.svg?style=for-the-badge&logo=go)
+![Go Version](https://img.shields.io/badge/Go-1.26.5-00ADD8.svg?style=for-the-badge&logo=go)
 ![Build Status](https://img.shields.io/badge/CI-passing-brightgreen.svg?style=for-the-badge&logo=githubactions)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)
 ![QTI Version](https://img.shields.io/badge/QTI-3.0-orange.svg?style=for-the-badge)
@@ -12,7 +12,7 @@
 
 ## 🌐 English
 
-Modern, High-Concurrency Computer-Based Assessment (CBA) Core Engine rewritten in **Go 1.26**.
+Modern, High-Concurrency Computer-Based Assessment (CBA) Core Engine rewritten in **Go 1.26.5**.
 
 `tao-core-go` modernizes the legacy PHP-based TAO (`tao-core`) architecture for concurrent examination workloads, integrating **QTI 3.0 Assessment Item Standards**, **IMS LTI 1.3 Advantage** (OIDC SSO & Automatic Grade Service), proctoring telemetry, and a decoupled **In-Memory EventBus**.
 
@@ -34,7 +34,7 @@ Modern, High-Concurrency Computer-Based Assessment (CBA) Core Engine rewritten i
 
 ### ⚡ Key Features & Tech Stack
 
-* **Core Runtime**: Go 1.26, Gin Web Framework, GORM ORM.
+* **Core Runtime**: Go 1.26.5, Gin Web Framework, GORM ORM.
 * **Production Runtime**: bounded HTTP timeouts, graceful shutdown, and configurable PostgreSQL connection pooling.
 * **EdTech Standards**:
   * **QTI 3.0 Package Engine**: Unzips `.zip` packages, parses QTI 3.0 XML, extracts media assets & replaces relative image URLs.
@@ -390,7 +390,7 @@ docker compose up -d --build
 
 ## 🌐 繁體中文
 
-基於 **Go 1.26** 語言重構的高效能、高併發電腦化測驗與評量核心引擎 (Modern High-Concurrency Computer-Based Assessment Core Engine)。
+基於 **Go 1.26.5** 語言重構的高效能、高併發電腦化測驗與評量核心引擎 (Modern High-Concurrency Computer-Based Assessment Core Engine)。
 
 本專案旨在全面升級傳統 PHP 版 TAO (`tao-core`) 系統，解決大考時的高併發交卷瓶頸，並整合最新 **QTI 3.0 試題規範**、**IMS LTI 1.3 Advantage** 跨平台單點登入與成績自動回寫、**監考防作弊數據分析 (切頁黑屏遮蓋)** 與 **解耦事件總線 (EventBus)**。
 
@@ -412,7 +412,7 @@ docker compose up -d --build
 
 ### ⚡ 核心特點與技術堆疊
 
-* **核心語言與框架**：Go 1.26、Gin Web Framework、GORM ORM。
+* **核心語言與框架**：Go 1.26.5、Gin Web Framework、GORM ORM。
 * **生產執行環境**：具備 HTTP timeout、優雅關閉及可設定的 PostgreSQL 連線池。
 * **國際標準整合**：
   * **QTI 3.0**：支援上傳 `.zip` 試題包、解壓 XML、自動提取圖片並儲存。

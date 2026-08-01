@@ -29,7 +29,7 @@ type RegisterPlatformRequest struct {
 	AuthLoginURL  string `json:"auth_login_url" binding:"required,max=500"`
 	ToolLaunchURL string `json:"tool_launch_url" binding:"required,max=500"`
 	KeyID         string `json:"key_id" binding:"omitempty,max=255"`
-	PrivateKey    string `json:"private_key" binding:"omitempty,max=16384"`
+	PrivateKey    string `json:"private_key" binding:"omitempty,max=16384"` // #nosec G117 -- Input DTO; encrypted before persistence and never returned.
 }
 
 // NewLTIHandler 建立並回傳 LTIHandler 實體。

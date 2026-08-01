@@ -341,6 +341,8 @@ func (s *ltiService) SubmitGradeToLMS(session *models.TestSession) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/vnd.ims.lis.v1.score+json")
+	// #nosec G704 -- scoreURL is HTTPS and allowlisted by OutboundPolicy; its
+	// transport re-resolves DNS, rejects non-public IPs, and disables redirects.
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -387,6 +389,8 @@ func (s *ltiService) fetchAGSAccessToken(platform *models.LTIPlatform, key *rsa.
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// #nosec G704 -- AuthTokenURL is HTTPS and allowlisted by OutboundPolicy; its
+	// transport re-resolves DNS, rejects non-public IPs, and disables redirects.
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -396,7 +400,7 @@ func (s *ltiService) fetchAGSAccessToken(platform *models.LTIPlatform, key *rsa.
 		return "", fmt.Errorf("LTI OAuth token 取得失敗: HTTP %d", resp.StatusCode)
 	}
 	var tokenResponse struct {
-		AccessToken string `json:"access_token"`
+		AccessToken string `json:"access_token"` // #nosec G117 -- OAuth response field; never serialized or logged.
 	}
 	decoder := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
 	if err := decoder.Decode(&tokenResponse); err != nil || tokenResponse.AccessToken == "" {
@@ -429,6 +433,8 @@ func (s *ltiService) signingKey(ctx context.Context, platform *models.LTIPlatfor
 	if err != nil {
 		return nil, err
 	}
+	// #nosec G704 -- KeySetURL is HTTPS and allowlisted by OutboundPolicy; its
+	// transport re-resolves DNS, rejects non-public IPs, and disables redirects.
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

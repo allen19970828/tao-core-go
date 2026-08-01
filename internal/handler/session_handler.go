@@ -149,7 +149,7 @@ func (h *SessionHandler) GetSession(c *gin.Context) {
 type RegisterWebhookRequest struct {
 	Event  string `json:"event" binding:"required,max=100"`
 	URL    string `json:"url" binding:"required,max=500"`
-	Secret string `json:"signing_secret" binding:"omitempty,min=32,max=255"`
+	Secret string `json:"signing_secret" binding:"omitempty,min=32,max=255"` // #nosec G117 -- Input DTO; encrypted before persistence and never returned.
 }
 
 // RegisterWebhook 處理 POST /api/v1/webhooks/configs

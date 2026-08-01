@@ -156,6 +156,8 @@ func (s *webhookService) sendWebhook(config models.WebhookConfig, eventName stri
 	req.Header.Set("X-Tao-Timestamp", timestamp)
 	req.Header.Set("X-Tao-Signature", signature)
 
+	// #nosec G704 -- TargetURL was validated against the configured host allowlist;
+	// the client also re-resolves DNS, rejects non-public IPs, and disables redirects.
 	response, err := s.httpClient.Do(req)
 	if err != nil {
 		s.logWebhookResult(config.ID, eventName, 0, err.Error(), false)
