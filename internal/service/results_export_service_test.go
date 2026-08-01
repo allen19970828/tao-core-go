@@ -19,7 +19,7 @@ func TestExportDeliveryResultsCSV(t *testing.T) {
 	sess := models.TestSession{
 		ID:               "session-csv-01",
 		DeliveryID:       deliveryID,
-		UserID:           "student-csv-01",
+		UserID:           "=HYPERLINK(\"https://evil.example\",\"student\")",
 		Status:           models.SessionStatusCompleted,
 		TotalScore:       95.5,
 		TimeSpentSeconds: 120,
@@ -38,5 +38,8 @@ func TestExportDeliveryResultsCSV(t *testing.T) {
 	}
 	if !strings.Contains(csvOutput, "session-csv-01") || !strings.Contains(csvOutput, "95.50") {
 		t.Errorf("CSV data row missing session details")
+	}
+	if strings.Contains(csvOutput, ",=HYPERLINK") || !strings.Contains(csvOutput, "'=HYPERLINK") {
+		t.Errorf("CSV formula value was not neutralized: %q", csvOutput)
 	}
 }

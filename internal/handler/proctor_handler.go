@@ -32,6 +32,10 @@ type RecordProctorEventRequest struct {
 // 上報切頁、跳出視窗、複製文字或 Web 端黑屏防截圖觸發事件。
 func (h *ProctorHandler) RecordEvent(c *gin.Context) {
 	sessionID := c.Param("id")
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		return
+	}
 
 	var req RecordProctorEventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -46,8 +50,8 @@ func (h *ProctorHandler) RecordEvent(c *gin.Context) {
 		Details:         req.Details,
 	}
 
-	if err := h.proctorService.RecordEvent(event); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	if err := h.proctorService.RecordEvent(event, userID); err != nil {
+		writeSessionError(c, err)
 		return
 	}
 

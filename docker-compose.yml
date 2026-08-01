@@ -8,30 +8,45 @@ services:
     container_name: tao-core-go-app
     restart: always
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
-      - SERVER_MODE=release
-      - DATABASE_DRIVER=postgres
-      - DATABASE_DSN=host=postgres user=tao password=taopass dbname=tao_core_db port=5432 sslmode=disable TimeZone=Asia/Taipei
-      - REDIS_ADDR=redis:6379
+      SERVER_MODE: release
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_ISSUER: ${JWT_ISSUER:?JWT_ISSUER is required}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:?JWT_AUDIENCE is required}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?APP_ENCRYPTION_KEY is required}
+      WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:?WEBHOOK_ALLOWED_HOSTS is required}
+      DEMO_SEED_ENABLED: "false"
+      DATABASE_DRIVER: postgres
+      # PostgreSQL 未發布 host port，流量僅存在 Compose 隔離網路；外部 DB 請改用 sslmode=verify-full。
+      DATABASE_ALLOW_INSECURE_INTERNAL: "true"
+      DATABASE_DSN: "host=postgres user=tao password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required} dbname=tao_core_db port=5432 sslmode=disable TimeZone=Asia/Taipei"
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
     volumes:
       - app_uploads:/app/uploads
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     container_name: tao-core-go-postgres
     restart: always
     environment:
       POSTGRES_USER: tao
-      POSTGRES_PASSWORD: taopass
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_DB: tao_core_db
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -39,17 +54,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
-  redis:
-    image: redis:7-alpine
-    container_name: tao-core-go-redis
-    restart: always
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   postgres_data:
-  redis_data:
   app_uploads:

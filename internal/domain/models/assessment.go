@@ -23,12 +23,12 @@ type Option struct {
 type Item struct {
 	ID            string    `gorm:"primaryKey;type:varchar(36)" json:"id"`
 	Title         string    `gorm:"type:varchar(255);not null" json:"title"`
-	Prompt        string    `gorm:"type:text;not null" json:"prompt"`                  // 題幹文字或 HTML
-	ItemType      ItemType  `gorm:"type:varchar(50);not null" json:"item_type"`        // 題目類型
-	OptionsJSON   string    `gorm:"type:text" json:"options_json"`                     // 序列化後的選項陣列
-	CorrectAnswer string    `gorm:"type:varchar(255);not null" json:"correct_answer"`  // 正確答案 (例如: "A" 或 "A,C")
-	MaxScore      float64   `gorm:"default:1.0" json:"max_score"`                      // 本題最高得分
-	LayoutHint    string    `gorm:"type:varchar(50);default:'AUTO'" json:"layout_hint"`// 排版提示: AUTO, 1_COL, 2_COL, 4_COL
+	Prompt        string    `gorm:"type:text;not null" json:"prompt"`                   // 題幹文字或 HTML
+	ItemType      ItemType  `gorm:"type:varchar(50);not null" json:"item_type"`         // 題目類型
+	OptionsJSON   string    `gorm:"type:text" json:"options_json"`                      // 序列化後的選項陣列
+	CorrectAnswer string    `gorm:"type:varchar(255);not null" json:"-"`                // 正確答案永不透過 API 序列化
+	MaxScore      float64   `gorm:"default:1.0" json:"max_score"`                       // 本題最高得分
+	LayoutHint    string    `gorm:"type:varchar(50);default:'AUTO'" json:"layout_hint"` // 排版提示: AUTO, 1_COL, 2_COL, 4_COL
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

@@ -2,30 +2,57 @@ name: TAO Core Go CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
+
+permissions:
+  contents: read
 
 jobs:
   test:
-    name: Build and Test
-    runs-on: ubuntu-latest
+    name: Security, Test, and Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.22'
+          go-version: '1.26.0'
           cache: true
 
-      - name: Run Vet
-        run: go vet ./...
+      - name: Verify dependency checksums and formatting
+        run: |
+          go mod verify
+          test -z "$(gofmt -l .)"
 
-      - name: Run Unit Tests with Race Detector
-        run: go test -v -race ./...
+      - name: Run vet and static analysis
+        run: |
+          go vet ./...
+          go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
 
-      - name: Verify Docker Build
-        run: docker build -t tao-core-go:latest .
+      - name: Run vulnerability and security scans
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+          go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0 ./...
+
+      - name: Run race tests and coverage gates
+        run: |
+          go test -race -coverprofile=coverage.out ./...
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
+          awk -v coverage="${total}" 'BEGIN { if (coverage + 0 < 55) { print "total coverage below 55%: " coverage "%"; exit 1 } }'
+          go test -coverprofile=handler-coverage.out ./internal/handler
+          handler="$(go tool cover -func=handler-coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
+          awk -v coverage="${handler}" 'BEGIN { if (coverage + 0 < 80) { print "handler coverage below 80%: " coverage "%"; exit 1 } }'
+
+      - name: Verify static Linux build
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/tao-core-go ./cmd/server
+
+      - name: Verify Docker build
+        run: docker build --pull=false -t tao-core-go:ci .

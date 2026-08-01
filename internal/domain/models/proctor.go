@@ -7,11 +7,11 @@ import (
 type ProctorEventType string
 
 const (
-	ProctorEventTabSwitch        ProctorEventType = "TAB_SWITCH"
-	ProctorEventFocusLost        ProctorEventType = "FOCUS_LOST"
+	ProctorEventTabSwitch         ProctorEventType = "TAB_SWITCH"
+	ProctorEventFocusLost         ProctorEventType = "FOCUS_LOST"
 	ProctorEventScreenshotAttempt ProctorEventType = "SCREENSHOT_ATTEMPT"
-	ProctorEventCopyAttempt      ProctorEventType = "COPY_ATTEMPT"
-	ProctorEventFullscreenExit   ProctorEventType = "FULLSCREEN_EXIT"
+	ProctorEventCopyAttempt       ProctorEventType = "COPY_ATTEMPT"
+	ProctorEventFullscreenExit    ProctorEventType = "FULLSCREEN_EXIT"
 )
 
 type ProctorEvent struct {

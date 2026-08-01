@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -76,12 +77,12 @@ func (s *resultsExportService) ExportDeliveryResultsCSV(deliveryID string, write
 		}
 
 		row := []string{
-			sess.ID,
-			sess.UserID,
+			sanitizeCSVCell(sess.ID),
+			sanitizeCSVCell(sess.UserID),
 			string(sess.Status),
 			fmt.Sprintf("%.2f", sess.TotalScore),
 			fmt.Sprintf("%d", sess.TimeSpentSeconds),
-			riskLevel,
+			sanitizeCSVCell(riskLevel),
 			tabSwitches,
 			fmt.Sprintf("%d", len(sess.Responses)),
 			startedAtStr,
@@ -93,4 +94,19 @@ func (s *resultsExportService) ExportDeliveryResultsCSV(deliveryID string, write
 	}
 
 	return nil
+}
+
+// sanitizeCSVCell prevents spreadsheet programs from interpreting exported,
+// user-controlled values as formulas when an administrator opens the CSV.
+func sanitizeCSVCell(value string) string {
+	trimmed := strings.TrimLeft(value, " \t\r\n")
+	if trimmed == "" {
+		return value
+	}
+	switch trimmed[0] {
+	case '=', '+', '-', '@':
+		return "'" + value
+	default:
+		return value
+	}
 }

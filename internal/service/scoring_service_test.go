@@ -1,6 +1,7 @@
 package service
 
 import (
+	"math"
 	"testing"
 
 	"tao-core-go/internal/domain/models"
@@ -27,6 +28,28 @@ func TestScoreItem(t *testing.T) {
 	}
 }
 
+func TestScoringRejectsInvalidMaximumScore(t *testing.T) {
+	service := NewScoringService()
+	for _, maximum := range []float64{0, -1, math.NaN(), math.Inf(1)} {
+		score, correct := service.ScoreItem(&models.Item{ItemType: models.ItemTypeSingleChoice, CorrectAnswer: "A", MaxScore: maximum}, "A")
+		if correct || score != 0 {
+			t.Fatalf("expected invalid maximum %v to be rejected", maximum)
+		}
+	}
+}
+
+func TestScoringRejectsBlankAnswers(t *testing.T) {
+	service := NewScoringService()
+	for _, item := range []*models.Item{
+		{ItemType: models.ItemTypeSingleChoice, CorrectAnswer: "", MaxScore: 1},
+		{ItemType: models.ItemTypeSingleChoice, CorrectAnswer: "A", MaxScore: 1},
+	} {
+		if score, correct := service.ScoreItem(item, " "); correct || score != 0 {
+			t.Fatal("expected blank answer or response to receive no score")
+		}
+	}
+}
+
 func TestBalanceOptionsKey(t *testing.T) {
 	svc := NewScoringService()
 
@@ -37,12 +60,18 @@ func TestBalanceOptionsKey(t *testing.T) {
 		{Identifier: "D", Text: "選項四"},
 	}
 
-	balanced := svc.BalanceOptionsKey(opts)
+	balanced, mapping, err := svc.BalanceOptionsKey(opts)
+	if err != nil {
+		t.Fatalf("BalanceOptionsKey failed: %v", err)
+	}
 
 	if len(balanced) != 4 {
 		t.Fatalf("Expected 4 options, got %d", len(balanced))
 	}
 	if balanced[0].Identifier != "A" || balanced[1].Identifier != "B" {
 		t.Errorf("Option identifiers should be reassigned A, B, C, D")
+	}
+	if len(mapping) != len(opts) {
+		t.Fatalf("Expected a complete identifier mapping, got %v", mapping)
 	}
 }

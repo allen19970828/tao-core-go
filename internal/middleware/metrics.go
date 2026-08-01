@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	TotalRequests    uint64
-	ActiveSessions   int64
+	TotalRequests     uint64
+	ActiveSessions    int64
 	CompletedSessions int64
 )
 

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,7 +13,7 @@ import (
 
 // ProctorService 提供切頁監控事件記錄與作弊風險評估介面。
 type ProctorService interface {
-	RecordEvent(event *models.ProctorEvent) error
+	RecordEvent(event *models.ProctorEvent, userID string) error
 	GetSessionProctorLog(sessionID string) ([]models.ProctorEvent, error)
 	GetProctorAnalytics(sessionID string) (*models.ProctorAnalyticsSummary, error)
 }
@@ -29,7 +31,21 @@ func NewProctorService(db *gorm.DB) ProctorService {
 
 // RecordEvent 寫入考生切頁、跳出視窗、複製文字或觸發黑屏防截圖的事件日誌。
 // （註：切頁不觸發強制斷考交卷，而是完整保存於資料庫供後續監考數據分析）。
-func (s *proctorService) RecordEvent(event *models.ProctorEvent) error {
+func (s *proctorService) RecordEvent(event *models.ProctorEvent, userID string) error {
+	var session models.TestSession
+	if err := s.db.Where("id = ? AND user_id = ?", event.SessionID, userID).First(&session).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrSessionNotFound
+		}
+		return err
+	}
+	if session.Status != models.SessionStatusInProgress {
+		return ErrSessionNotActive
+	}
+	if !validProctorEventType(event.EventType) || event.DurationSeconds < 0 || event.DurationSeconds > 86400 || len(event.Details) > 4096 {
+		return errors.New("監考事件內容無效")
+	}
+	event.Details = strings.TrimSpace(event.Details)
 	if event.ID == "" {
 		event.ID = uuid.New().String()
 	}
@@ -37,6 +53,16 @@ func (s *proctorService) RecordEvent(event *models.ProctorEvent) error {
 		event.CreatedAt = time.Now()
 	}
 	return s.db.Create(event).Error
+}
+
+func validProctorEventType(eventType models.ProctorEventType) bool {
+	switch eventType {
+	case models.ProctorEventTabSwitch, models.ProctorEventFocusLost, models.ProctorEventScreenshotAttempt,
+		models.ProctorEventCopyAttempt, models.ProctorEventFullscreenExit:
+		return true
+	default:
+		return false
+	}
 }
 
 // GetSessionProctorLog 查詢指定會話的所有監考事件紀錄。
