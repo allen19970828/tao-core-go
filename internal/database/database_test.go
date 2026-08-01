@@ -1,10 +1,40 @@
 package database
 
 import (
+	"reflect"
 	"testing"
 
 	"tao-core-go/internal/domain/models"
 )
+
+func TestSchemaModelsFollowForeignKeyDependencies(t *testing.T) {
+	positions := make(map[reflect.Type]int)
+	for position, model := range schemaModels() {
+		positions[reflect.TypeOf(model)] = position
+	}
+	dependencies := []struct {
+		parent any
+		child  any
+	}{
+		{&models.Test{}, &models.TestSection{}},
+		{&models.TestSection{}, &models.TestItem{}},
+		{&models.Item{}, &models.TestItem{}},
+		{&models.Test{}, &models.Delivery{}},
+		{&models.Delivery{}, &models.TestSession{}},
+		{&models.TestSession{}, &models.ItemResponse{}},
+		{&models.LTIPlatform{}, &models.LTIResourceLink{}},
+		{&models.LTIPlatform{}, &models.LTILinkSession{}},
+		{&models.Group{}, &models.UserGroup{}},
+		{&models.Group{}, &models.DeliveryGroup{}},
+	}
+	for _, dependency := range dependencies {
+		parentType := reflect.TypeOf(dependency.parent)
+		childType := reflect.TypeOf(dependency.child)
+		if positions[parentType] >= positions[childType] {
+			t.Fatalf("schema dependency %v must precede %v", parentType, childType)
+		}
+	}
+}
 
 func TestMigrateAndVerifySchema(t *testing.T) {
 	db, err := Open("sqlite", t.TempDir()+"/schema.db")
