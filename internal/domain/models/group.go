@@ -16,7 +16,7 @@ func (Group) TableName() string {
 }
 
 type UserGroup struct {
-	UserID  string `gorm:"primaryKey;type:varchar(36)" json:"user_id"`
+	UserID  string `gorm:"primaryKey;type:varchar(255)" json:"user_id"`
 	GroupID string `gorm:"primaryKey;type:varchar(36)" json:"group_id"`
 }
 

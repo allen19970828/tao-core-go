@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -8,6 +9,33 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+const minJWTSecretLength = 32
+
+type JWTConfig struct {
+	Secret   string // #nosec G117 -- Runtime-only HMAC configuration; never serialized or logged.
+	Issuer   string
+	Audience string
+}
+
+// ValidateJWTSecret 防止服務使用可猜測或誤留白的 HMAC 金鑰啟動。
+func ValidateJWTSecret(secret string) error {
+	if secret != strings.TrimSpace(secret) || len([]byte(secret)) < minJWTSecretLength {
+		return errors.New("JWT_SECRET 必須至少包含 32 bytes")
+	}
+	return nil
+}
+
+func ValidateJWTConfig(config JWTConfig) error {
+	if err := ValidateJWTSecret(config.Secret); err != nil {
+		return err
+	}
+	if strings.TrimSpace(config.Issuer) == "" || strings.TrimSpace(config.Audience) == "" ||
+		config.Issuer != strings.TrimSpace(config.Issuer) || config.Audience != strings.TrimSpace(config.Audience) {
+		return errors.New("JWT_ISSUER 與 JWT_AUDIENCE 不可留白")
+	}
+	return nil
+}
 
 // Claims 定義 JWT Token 攜帶的 Payload 結構體。
 type Claims struct {
@@ -17,23 +45,43 @@ type Claims struct {
 }
 
 // GenerateJWT 為指定使用者簽發有效期為 tokenDuration 的 JWT Token。
-func GenerateJWT(userID string, roles []string, secret string, tokenDuration time.Duration) (string, error) {
+func GenerateJWT(userID string, roles []string, config JWTConfig, tokenDuration time.Duration) (string, error) {
+	if err := ValidateJWTConfig(config); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(userID) == "" || len(userID) > 255 {
+		return "", errors.New("JWT user_id 不可留白或超過 255 bytes")
+	}
+	if tokenDuration <= 0 {
+		return "", errors.New("JWT 有效期間必須大於零")
+	}
+
 	claims := &Claims{
 		UserID: userID,
 		Roles:  roles,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenDuration)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    config.Issuer,
+			Audience:  jwt.ClaimStrings{config.Audience},
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(secret))
+	return token.SignedString([]byte(config.Secret))
 }
 
 // JWTAuthMiddleware 驗證 Authorization Header 中的 Bearer JWT Token。
-func JWTAuthMiddleware(secret string) gin.HandlerFunc {
+func JWTAuthMiddleware(config JWTConfig) gin.HandlerFunc {
+	configErr := ValidateJWTConfig(config)
+
 	return func(c *gin.Context) {
+		if configErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "伺服器認證設定無效"})
+			c.Abort()
+			return
+		}
+
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "未提供 Authorization 請求標頭"})
@@ -51,12 +99,31 @@ func JWTAuthMiddleware(secret string) gin.HandlerFunc {
 		tokenString := parts[1]
 		claims := &Claims{}
 
-		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-			return []byte(secret), nil
-		})
+		token, err := jwt.ParseWithClaims(
+			tokenString,
+			claims,
+			func(token *jwt.Token) (interface{}, error) {
+				return []byte(config.Secret), nil
+			},
+			jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+			jwt.WithIssuer(config.Issuer),
+			jwt.WithAudience(config.Audience),
+			jwt.WithExpirationRequired(),
+			jwt.WithIssuedAt(),
+		)
 
 		if err != nil || !token.Valid {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Token 無效或已過期"})
+			c.Abort()
+			return
+		}
+		if strings.TrimSpace(claims.UserID) == "" || len(claims.UserID) > 255 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Token 缺少有效的 user_id"})
+			c.Abort()
+			return
+		}
+		if claims.IssuedAt == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Token 缺少簽發時間"})
 			c.Abort()
 			return
 		}

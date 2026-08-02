@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -19,6 +20,8 @@ type RateLimiter struct {
 	limit    int
 	window   time.Duration
 }
+
+const maxTrackedRateLimitClients = 10000
 
 func NewRateLimiter(maxRequests int, windowDuration time.Duration) *RateLimiter {
 	rl := &RateLimiter{
@@ -53,6 +56,14 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 		now := time.Now()
 
 		if !exists || now.Sub(v.lastSeen) > rl.window {
+			if !exists && len(rl.visitors) >= maxTrackedRateLimitClients {
+				// Evict one arbitrary entry in constant expected time. The periodic
+				// cleanup handles age ordering; this branch only bounds memory under attack.
+				for ip := range rl.visitors {
+					delete(rl.visitors, ip)
+					break
+				}
+			}
 			rl.visitors[clientIP] = &clientVisitor{
 				lastSeen: now,
 				count:    1,
@@ -65,9 +76,10 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 		v.count++
 		if v.count > rl.limit {
 			rl.mu.Unlock()
+			c.Header("Retry-After", fmt.Sprintf("%.0f", max(1, rl.window.Seconds())))
 			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error":       "Too Many Requests: Rate limit exceeded (Max 10 req/sec)",
-				"retry_after": "1s",
+				"error":       fmt.Sprintf("Too Many Requests: rate limit exceeded (max %d per %s)", rl.limit, rl.window),
+				"retry_after": rl.window.String(),
 			})
 			c.Abort()
 			return

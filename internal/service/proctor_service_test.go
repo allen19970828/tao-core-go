@@ -11,6 +11,17 @@ func TestProctorService(t *testing.T) {
 	proctorSvc := NewProctorService(db)
 
 	sessionID := "session-proctor-test-01"
+	userID := "student-proctor-01"
+	testID := "test-proctor-01"
+	if err := db.Create(&models.Test{ID: testID, Title: "Proctor test"}).Error; err != nil {
+		t.Fatalf("seed test: %v", err)
+	}
+	if err := db.Create(&models.Delivery{ID: "delivery-proctor-01", TestID: testID, Title: "Proctor delivery", IsActive: true}).Error; err != nil {
+		t.Fatalf("seed delivery: %v", err)
+	}
+	if err := db.Create(&models.TestSession{ID: sessionID, DeliveryID: "delivery-proctor-01", UserID: userID, Attempt: 1, Status: models.SessionStatusInProgress}).Error; err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
 
 	// 1. Record normal tab switch
 	err := proctorSvc.RecordEvent(&models.ProctorEvent{
@@ -18,7 +29,7 @@ func TestProctorService(t *testing.T) {
 		EventType:       models.ProctorEventTabSwitch,
 		DurationSeconds: 15,
 		Details:         "Tab switched to another app",
-	})
+	}, userID)
 	if err != nil {
 		t.Fatalf("RecordEvent failed: %v", err)
 	}
@@ -29,7 +40,7 @@ func TestProctorService(t *testing.T) {
 		EventType:       models.ProctorEventScreenshotAttempt,
 		DurationSeconds: 0,
 		Details:         "Blur blackout triggered by window.onblur",
-	})
+	}, userID)
 	if err != nil {
 		t.Fatalf("RecordEvent failed: %v", err)
 	}
@@ -57,5 +68,16 @@ func TestProctorService(t *testing.T) {
 	}
 	if analytics.RiskLevel != "MEDIUM" {
 		t.Errorf("Expected RiskLevel 'MEDIUM', got %s", analytics.RiskLevel)
+	}
+
+	if err := proctorSvc.RecordEvent(&models.ProctorEvent{
+		SessionID: sessionID, EventType: models.ProctorEventCopyAttempt,
+	}, "another-student"); err != ErrSessionNotFound {
+		t.Fatalf("expected a foreign proctor event to be rejected, got %v", err)
+	}
+	if err := proctorSvc.RecordEvent(&models.ProctorEvent{
+		SessionID: sessionID, EventType: models.ProctorEventType("ARBITRARY"),
+	}, userID); err == nil {
+		t.Fatal("expected an unknown proctor event type to be rejected")
 	}
 }

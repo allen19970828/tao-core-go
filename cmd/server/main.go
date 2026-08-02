@@ -1,22 +1,28 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"tao-core-go/internal/database"
 	"tao-core-go/internal/domain/models"
 	"tao-core-go/internal/handler"
 	"tao-core-go/internal/middleware"
+	"tao-core-go/internal/security"
 	"tao-core-go/internal/service"
 )
 
@@ -44,76 +50,105 @@ func main() {
 	viper.AddConfigPath("../config")
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("database.dsn", "tao_core.db")
-	viper.SetDefault("jwt.secret", "tao-core-go-default-secret")
+	viper.SetDefault("database.max_open_connections", 50)
+	viper.SetDefault("database.max_idle_connections", 10)
+	viper.SetDefault("database.connection_max_lifetime_minutes", 30)
+	viper.SetDefault("demo.seed_enabled", false)
 
 	// 支援 Docker / 雲端環境變數自動覆蓋 (例如: DATABASE_DRIVER=postgres)
-	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	viper.AutomaticEnv()
+	if err := viper.BindEnv("security.encryption_key", "APP_ENCRYPTION_KEY"); err != nil {
+		logger.Fatal("無法綁定 APP_ENCRYPTION_KEY", zap.Error(err))
+	}
 
 	if err := viper.ReadInConfig(); err != nil {
 		logger.Warn("未找到預設配置檔案，將使用預設參數運作", zap.Error(err))
 	}
 
+	jwtConfig := middleware.JWTConfig{
+		Secret:   viper.GetString("jwt.secret"),
+		Issuer:   viper.GetString("jwt.issuer"),
+		Audience: viper.GetString("jwt.audience"),
+	}
+	if err := middleware.ValidateJWTConfig(jwtConfig); err != nil {
+		logger.Fatal("JWT 認證設定無效，請透過 JWT_SECRET 提供高強度金鑰", zap.Error(err))
+	}
+	secretCipher, err := security.NewSecretCipher(viper.GetString("security.encryption_key"))
+	if err != nil {
+		logger.Fatal("秘密加密設定無效，請透過 APP_ENCRYPTION_KEY 提供 32-byte base64 金鑰", zap.Error(err))
+	}
+
 	// 3. 初始化 GORM 資料庫連線與資料表自動遷移 (Auto-Migrations)
 	dsn := viper.GetString("database.dsn")
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	databaseDriver := viper.GetString("database.driver")
+	if err := database.ValidateTransportSecurity(viper.GetString("server.mode"), databaseDriver, dsn, viper.GetBool("database.allow_insecure_internal")); err != nil {
+		logger.Fatal("資料庫 TLS 設定不安全", zap.Error(err))
+	}
+	db, err := database.Open(databaseDriver, dsn)
 	if err != nil {
 		logger.Fatal("資料庫連線失敗", zap.Error(err))
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		logger.Fatal("無法設定資料庫連線池", zap.Error(err))
+	}
+	defer sqlDB.Close()
+	maxOpen := viper.GetInt("database.max_open_connections")
+	maxIdle := viper.GetInt("database.max_idle_connections")
+	if database.IsSQLiteDriver(databaseDriver) {
+		maxOpen, maxIdle = 1, 1
+	}
+	if maxOpen <= 0 || maxIdle < 0 || maxIdle > maxOpen {
+		logger.Fatal("資料庫連線池設定無效")
+	}
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetMaxIdleConns(maxIdle)
+	sqlDB.SetConnMaxLifetime(time.Duration(viper.GetInt("database.connection_max_lifetime_minutes")) * time.Minute)
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pingCancel()
+	if err := sqlDB.PingContext(pingCtx); err != nil {
+		logger.Fatal("資料庫健康檢查失敗", zap.Error(err))
+	}
 
 	logger.Info("正在執行資料庫 Auto-Migrations 自動遷移...")
-	err = db.AutoMigrate(
-		&models.User{},
-		&models.Role{},
-		&models.Permission{},
-		&models.UserRole{},
-		&models.RolePermission{},
-		&models.Item{},
-		&models.TestSection{},
-		&models.TestItem{},
-		&models.Test{},
-		&models.Delivery{},
-		&models.TestSession{},
-		&models.ItemResponse{},
-		&models.WebhookConfig{},
-		&models.WebhookLog{},
-		&models.LTIPlatform{},
-		&models.LTILinkSession{},
-		&models.ProctorEvent{},
-		&models.Group{},
-		&models.UserGroup{},
-		&models.DeliveryGroup{},
-	)
-	if err != nil {
+	if err := database.Migrate(db); err != nil {
 		logger.Fatal("資料庫 Migration 遷移失敗", zap.Error(err))
 	}
 
-	// 若資料庫為空，自動寫入測試示範資料 (Demo Data)
-	seedDemoData(db, logger)
+	// Demo data 必須顯式啟用，避免空白的生產資料庫自動產生公開測驗。
+	if viper.GetBool("demo.seed_enabled") {
+		seedDemoData(db, logger)
+	}
 
 	// 4. 初始化解耦事件總線 (EventBus) 與核心業務服務 (Services)
 	eventBus := service.NewEventBus(logger)
 	scoringSvc := service.NewScoringService()
-	webhookSvc := service.NewWebhookService(db, logger, viper.GetInt("webhook.worker_pool_size"))
+	webhookHosts := strings.FieldsFunc(viper.GetString("webhook.allowed_hosts"), func(r rune) bool { return r == ',' })
+	webhookSvc, err := service.NewWebhookService(db, logger, viper.GetInt("webhook.worker_pool_size"), secretCipher, webhookHosts)
+	if err != nil {
+		logger.Fatal("Webhook 安全設定無效", zap.Error(err))
+	}
 	sessionSvc := service.NewSessionService(db, scoringSvc, webhookSvc)
 	qtiSvc := service.NewQTIService(db, scoringSvc)
-	ltiSvc := service.NewLTIService(db, logger, sessionSvc)
+	ltiSvc := service.NewLTIService(db, logger, sessionSvc, secretCipher)
 	proctorSvc := service.NewProctorService(db)
 	exportSvc := service.NewResultsExportService(db, proctorSvc)
 
-	// 注入 SessionService 的依賴組件 (EventBus 與 LTIService)
+	// 注入事件與已完成驗證的 LTI AGS 回傳服務。
 	if impl, ok := sessionSvc.(interface {
-		SetLTIService(service.LTIService)
 		SetEventBus(service.EventBus)
+		SetLTIService(service.LTIService)
 	}); ok {
-		impl.SetLTIService(ltiSvc)
 		impl.SetEventBus(eventBus)
+		impl.SetLTIService(ltiSvc)
 	}
 
 	// 5. 初始化 HTTP 控制器 (Handlers)
 	sessionHandler := handler.NewSessionHandler(sessionSvc, webhookSvc)
 	qtiHandler := handler.NewQTIHandler(qtiSvc, "./uploads/media")
-	ltiHandler := handler.NewLTIHandler(ltiSvc)
+	tokenTTL := time.Duration(viper.GetInt("jwt.expire_hours")) * time.Hour
+	ltiHandler := handler.NewLTIHandler(ltiSvc, jwtConfig, tokenTTL)
 	proctorHandler := handler.NewProctorHandler(proctorSvc)
 	resultsHandler := handler.NewResultsHandler(exportSvc)
 
@@ -124,15 +159,18 @@ func main() {
 	}
 
 	r := gin.Default()
+	trustedProxies := strings.FieldsFunc(viper.GetString("server.trusted_proxies"), func(r rune) bool { return r == ',' })
+	if err := r.SetTrustedProxies(trustedProxies); err != nil {
+		logger.Fatal("trusted proxy 設定無效", zap.Error(err))
+	}
 
 	// 全域載入 Prometheus 效能與流量收集中間件
 	r.Use(middleware.MetricsCollector())
+	r.Use(middleware.SecurityHeaders())
+	r.Use(middleware.JSONBodyLimit(1 << 20))
 
 	// 初始化 API 令牌桶防刷限流器 (限制 10 req/s)
 	rateLimiter := middleware.NewRateLimiter(10, time.Second)
-
-	// 掛載 QTI 題目提取出的靜態多媒體檔案目錄 (/uploads)
-	r.Static("/uploads", "./uploads")
 
 	// 根目錄歡迎頁面 (HTML Web UI 儀表板)
 	r.GET("/", func(c *gin.Context) {
@@ -158,7 +196,8 @@ func main() {
         <h3>可用 API 列表：</h3>
         <ul>
             <li>GET  <a href="/health">/health</a> - 系統健康檢查</li>
-            <li>GET  <a href="/metrics">/metrics</a> - Prometheus 效能與流量監控端點</li>
+            <li>GET  <a href="/ready">/ready</a> - 資料庫連線與服務就緒檢查</li>
+            <li>GET  /metrics - Prometheus 效能與流量監控端點 (ADMIN)</li>
             <li>POST /api/v1/sessions/start - 開始測驗會話</li>
             <li>GET  /api/v1/sessions/:id - 查詢測驗狀態</li>
             <li>POST /api/v1/sessions/:id/response - 暫存題目答案 (含 Rate Limit 限流)</li>
@@ -169,10 +208,10 @@ func main() {
             <li>POST /api/v1/items/import-qti - 匯入 QTI 3.0 .zip 試題包</li>
             <li>POST /api/v1/lti/platforms - 註冊 LTI 1.3 平台 (Moodle/Canvas)</li>
             <li>GET/POST /api/v1/lti/login - LTI 1.3 OIDC SSO 登入發起</li>
-            <li>POST /api/v1/lti/launch - LTI 1.3 測驗開啟入口</li>
+            <li>POST /api/v1/lti/launch - LTI 1.3 驗證與測驗開啟入口</li>
             <li>POST /api/v1/webhooks/configs - 註冊異步 Webhook</li>
         </ul>
-        <p><small>演示 Delivery ID: <code>delivery-demo-01</code></small></p>
+        <p><small>健康檢查與 LTI 協定入口為公開端點；其餘 API 與媒體均需要有效的 Bearer JWT。</small></p>
     </div>
 </body>
 </html>`
@@ -180,69 +219,117 @@ func main() {
 		c.String(200, html)
 	})
 
-	// 系統健康檢查端點
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "UP", "engine": "tao-core-go", "timestamp": time.Now()})
+	registerOperationalRoutes(r, sqlDB)
+
+	// 監控與 API 安全邊界集中於 registerProtectedRoutes。
+
+	registerProtectedRoutes(r, jwtConfig, rateLimiter, apiRouteHandlers{
+		session: sessionHandler,
+		qti:     qtiHandler,
+		lti:     ltiHandler,
+		proctor: proctorHandler,
+		results: resultsHandler,
 	})
-
-	// Prometheus 效能與流量監控端點
-	r.GET("/metrics", func(c *gin.Context) {
-		c.JSON(200, middleware.GetMetricsSummary())
-	})
-
-	// API v1 路由群組
-	api := r.Group("/api/v1")
-	{
-		// 測驗會話 (TestSession) 路由
-		sessions := api.Group("/sessions")
-		{
-			sessions.POST("/start", sessionHandler.StartSession)
-			sessions.GET("/:id", sessionHandler.GetSession)
-			sessions.POST("/:id/response", rateLimiter.Middleware(), sessionHandler.SaveResponse)
-			sessions.POST("/:id/submit", sessionHandler.SubmitSession)
-
-			// 監考防作弊與切頁數據分析路由
-			sessions.POST("/:id/proctor/event", proctorHandler.RecordEvent)
-			sessions.GET("/:id/proctor/log", proctorHandler.GetProctorLog)
-			sessions.GET("/:id/proctor/analytics", proctorHandler.GetProctorAnalytics)
-		}
-
-		// 測驗發布與成績 CSV 匯出路由
-		deliveries := api.Group("/deliveries")
-		{
-			deliveries.GET("/:id/results/csv", resultsHandler.ExportResultsCSV)
-		}
-
-		// QTI 3.0 試題包匯入路由
-		items := api.Group("/items")
-		{
-			items.POST("/import-qti", qtiHandler.ImportQTIPackage)
-		}
-
-		// LTI 1.3 Advantage 跨平台單點登入與成績回寫路由
-		lti := api.Group("/lti")
-		{
-			lti.POST("/platforms", ltiHandler.RegisterPlatform)
-			lti.GET("/login", ltiHandler.InitiateLogin)
-			lti.POST("/login", ltiHandler.InitiateLogin)
-			lti.POST("/launch", ltiHandler.HandleLaunch)
-		}
-
-		// Webhook 訂冊與日誌查詢路由
-		webhooks := api.Group("/webhooks")
-		{
-			webhooks.POST("/configs", sessionHandler.RegisterWebhook)
-			webhooks.GET("/logs", sessionHandler.GetWebhookLogs)
-		}
-	}
 
 	// 7. 啟動 HTTP 伺服器
 	port := viper.GetInt("server.port")
 	addr := fmt.Sprintf(":%d", port)
 	logger.Info("TAO Core Go 核心引擎已準備就緒！", zap.String("listen_address", addr))
-	if err := r.Run(addr); err != nil {
-		logger.Fatal("伺服器啟動失敗", zap.Error(err))
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
+	serverErrors := make(chan error, 1)
+	go func() { serverErrors <- server.ListenAndServe() }()
+	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	select {
+	case err := <-serverErrors:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Fatal("伺服器啟動失敗", zap.Error(err))
+		}
+	case <-signalCtx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Error("伺服器無法優雅關閉", zap.Error(err))
+		}
+	}
+}
+
+type apiRouteHandlers struct {
+	session *handler.SessionHandler
+	qti     *handler.QTIHandler
+	lti     *handler.LTIHandler
+	proctor *handler.ProctorHandler
+	results *handler.ResultsHandler
+}
+
+type databasePinger interface {
+	PingContext(context.Context) error
+}
+
+// registerOperationalRoutes separates liveness from readiness: /health only
+// confirms the HTTP process is alive, while /ready also verifies the database.
+func registerOperationalRoutes(r *gin.Engine, pinger databasePinger) {
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "UP", "engine": "tao-core-go", "timestamp": time.Now().UTC()})
+	})
+	r.GET("/ready", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+		if pinger == nil || pinger.PingContext(ctx) != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "NOT_READY", "engine": "tao-core-go"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "READY", "engine": "tao-core-go", "timestamp": time.Now().UTC()})
+	})
+}
+
+// registerProtectedRoutes 集中定義實際 API 安全邊界，避免新增路由時漏掛認證。
+func registerProtectedRoutes(r *gin.Engine, jwtConfig middleware.JWTConfig, rateLimiter *middleware.RateLimiter, handlers apiRouteHandlers) {
+	auth := middleware.JWTAuthMiddleware(jwtConfig)
+	admin := middleware.RequireRole("ADMIN")
+	protectedMedia := r.Group("")
+	protectedMedia.Use(auth)
+	protectedMedia.StaticFS("/uploads", gin.Dir("./uploads", false))
+
+	r.GET("/metrics", auth, admin, func(c *gin.Context) {
+		c.JSON(200, middleware.GetMetricsSummary())
+	})
+
+	api := r.Group("/api/v1")
+	authenticated := api.Group("")
+	authenticated.Use(auth)
+
+	sessions := authenticated.Group("/sessions")
+	sessions.POST("/start", handlers.session.StartSession)
+	sessions.GET("/:id", handlers.session.GetSession)
+	sessions.POST("/:id/response", rateLimiter.Middleware(), handlers.session.SaveResponse)
+	sessions.POST("/:id/submit", handlers.session.SubmitSession)
+	sessions.POST("/:id/proctor/event", handlers.proctor.RecordEvent)
+
+	adminAPI := api.Group("")
+	adminAPI.Use(auth, admin)
+	adminAPI.GET("/sessions/:id/proctor/log", handlers.proctor.GetProctorLog)
+	adminAPI.GET("/sessions/:id/proctor/analytics", handlers.proctor.GetProctorAnalytics)
+	adminAPI.GET("/deliveries/:id/results/csv", handlers.results.ExportResultsCSV)
+	adminAPI.POST("/items/import-qti", handlers.qti.ImportQTIPackage)
+	adminAPI.POST("/lti/platforms", handlers.lti.RegisterPlatform)
+	adminAPI.POST("/lti/resource-links", handlers.lti.RegisterResourceLink)
+	adminAPI.POST("/webhooks/configs", handlers.session.RegisterWebhook)
+	adminAPI.GET("/webhooks/logs", handlers.session.GetWebhookLogs)
+
+	lti := api.Group("/lti")
+	lti.Use(rateLimiter.Middleware())
+	lti.GET("/login", handlers.lti.InitiateLogin)
+	lti.POST("/login", handlers.lti.InitiateLogin)
+	lti.POST("/launch", handlers.lti.HandleLaunch)
 }
 
 // seedDemoData 在資料庫無資料時，自動寫入一組測試用試卷、題目與試驗發布。
@@ -319,10 +406,10 @@ func seedDemoData(db *gorm.DB, logger *zap.Logger) {
 
 	// 4. 建立試驗發布 (Delivery)
 	delivery := models.Delivery{
-		ID:         "delivery-demo-01",
-		TestID:     testID,
-		Title:      "2026 全國模擬考演示場次",
-		IsActive:   true,
+		ID:          "delivery-demo-01",
+		TestID:      testID,
+		Title:       "2026 全國模擬考演示場次",
+		IsActive:    true,
 		MaxAttempts: 1,
 	}
 	db.Create(&delivery)

@@ -6,7 +6,7 @@ import (
 
 // User 代表系統使用者實體 (學生、教師、管理員或考務人員)。
 type User struct {
-	ID        string    `gorm:"primaryKey;type:varchar(36)" json:"id"`
+	ID        string    `gorm:"primaryKey;type:varchar(255)" json:"id"`
 	Username  string    `gorm:"type:varchar(100);uniqueIndex;not null" json:"username"`
 	Email     string    `gorm:"type:varchar(255);uniqueIndex;not null" json:"email"`
 	Password  string    `gorm:"type:varchar(255);not null" json:"-"` // 加密雜湊密碼 (JSON 不序列化)
@@ -34,7 +34,7 @@ type Permission struct {
 
 // UserRole 代表使用者與角色的多對多關聯實體。
 type UserRole struct {
-	UserID string `gorm:"primaryKey;type:varchar(36)" json:"user_id"`
+	UserID string `gorm:"primaryKey;type:varchar(255)" json:"user_id"`
 	RoleID string `gorm:"primaryKey;type:varchar(36)" json:"role_id"`
 }
 

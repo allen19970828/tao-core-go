@@ -1,10 +1,12 @@
 package service
 
 import (
-	"math/rand"
+	"crypto/rand"
+	"errors"
+	"math"
+	"math/big"
 	"sort"
 	"strings"
-	"time"
 
 	"tao-core-go/internal/domain/models"
 )
@@ -12,7 +14,7 @@ import (
 // ScoringService 提供自動計分引擎與選項平衡演算法介面。
 type ScoringService interface {
 	ScoreItem(item *models.Item, responseData string) (score float64, isCorrect bool)
-	BalanceOptionsKey(options []models.Option) []models.Option
+	BalanceOptionsKey(options []models.Option) ([]models.Option, map[string]string, error)
 }
 
 type scoringService struct{}
@@ -28,8 +30,14 @@ func NewScoringService() ScoringService {
 // - MULTIPLE_CHOICE (多選題)：排序後比對逗號分隔字串 (例如 "A,C")
 // - SHORT_ANSWER (簡答題)：去除前後空白與大小寫精準比對
 func (s *scoringService) ScoreItem(item *models.Item, responseData string) (float64, bool) {
+	if item == nil || item.MaxScore <= 0 || item.MaxScore > 1_000_000 || math.IsNaN(item.MaxScore) || math.IsInf(item.MaxScore, 0) {
+		return 0, false
+	}
 	cleanResp := strings.TrimSpace(responseData)
 	cleanAnswer := strings.TrimSpace(item.CorrectAnswer)
+	if cleanResp == "" || cleanAnswer == "" {
+		return 0, false
+	}
 
 	switch item.ItemType {
 	case models.ItemTypeSingleChoice:
@@ -64,26 +72,31 @@ func (s *scoringService) ScoreItem(item *models.Item, responseData string) (floa
 
 // BalanceOptionsKey 實作「選項鍵 25% 均勻洗牌演算法」。
 // 洗牌並重排選項的 Identifier (A, B, C, D)，確保各選項在整張試卷中的正確答案比例接近 25%。
-func (s *scoringService) BalanceOptionsKey(options []models.Option) []models.Option {
+func (s *scoringService) BalanceOptionsKey(options []models.Option) ([]models.Option, map[string]string, error) {
 	if len(options) == 0 {
-		return options
+		return options, map[string]string{}, nil
 	}
-
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	if len(options) > 26 {
+		return nil, nil, errors.New("選項數量不可超過 26")
+	}
 
 	shuffled := make([]models.Option, len(options))
 	copy(shuffled, options)
-
-	r.Shuffle(len(shuffled), func(i, j int) {
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-	})
-
-	identifiers := []string{"A", "B", "C", "D", "E", "F"}
-	for i := range shuffled {
-		if i < len(identifiers) {
-			shuffled[i].Identifier = identifiers[i]
+	for i := len(shuffled) - 1; i > 0; i-- {
+		value, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			return nil, nil, err
 		}
+		j := int(value.Int64())
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
 
-	return shuffled
+	identifierMap := make(map[string]string, len(shuffled))
+	for i := range shuffled {
+		newIdentifier := string(rune('A' + i))
+		identifierMap[shuffled[i].Identifier] = newIdentifier
+		shuffled[i].Identifier = newIdentifier
+	}
+
+	return shuffled, identifierMap, nil
 }
